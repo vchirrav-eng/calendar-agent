@@ -16,7 +16,10 @@ log = logging.getLogger(__name__)
 
 app = FastAPI(title="Calendar Agent Webhook")
 
-WA_VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN", "")
+# Read at request time, not module load time, to ensure env vars are loaded
+def get_verify_token():
+    return os.environ.get("WA_VERIFY_TOKEN", "")
+
 WA_ACCESS_TOKEN = os.getenv("WA_ACCESS_TOKEN", "")
 WA_PHONE_NUMBER_ID = os.getenv("WA_PHONE_NUMBER_ID", "")
 WA_API_URL = f"https://graph.facebook.com/v19.0/{WA_PHONE_NUMBER_ID}/messages"
@@ -27,33 +30,40 @@ async def health():
     return {"status": "ok", "service": "calendar-agent"}
 
 
+@app.get("/debug")
+async def debug():
+    """Temporary debug endpoint — remove after fixing."""
+    token = os.environ.get("WA_VERIFY_TOKEN", "NOT_SET")
+    return {
+        "WA_VERIFY_TOKEN_set": token != "NOT_SET",
+        "WA_VERIFY_TOKEN_length": len(token),
+        "WA_VERIFY_TOKEN_value": token,  # remove after debugging
+        "all_env_keys": [k for k in os.environ.keys() if k.startswith("WA_")]
+    }
+
+
 @app.get("/webhook")
 async def verify_webhook(request: Request):
-    """
-    Meta sends hub.mode, hub.challenge, hub.verify_token as query params.
-    FastAPI Query() with alias handles dots, but reading from request.query_params
-    directly is more reliable when Meta sends both dot and underscore variants.
-    """
     params = request.query_params
-
-    # Accept both dot-notation and underscore-notation
     mode = params.get("hub.mode") or params.get("hub_mode")
     challenge = params.get("hub.challenge") or params.get("hub_challenge")
     token = params.get("hub.verify_token") or params.get("hub_verify_token")
 
-    log.info("Webhook verify — mode=%s token=%s challenge=%s", mode, token, challenge)
+    verify_token = get_verify_token()
 
-    if mode == "subscribe" and token == WA_VERIFY_TOKEN:
+    log.info("Webhook verify — mode=%s token=%s challenge=%s", mode, token, challenge)
+    log.info("Server verify token = '%s' (len=%d)", verify_token, len(verify_token))
+
+    if mode == "subscribe" and token == verify_token:
         log.info("Webhook verified successfully.")
         return PlainTextResponse(content=challenge)
 
-    log.warning("Verification failed — token mismatch. Got: %s Expected: %s", token, WA_VERIFY_TOKEN)
+    log.warning("Verification failed — Got: '%s' Expected: '%s'", token, verify_token)
     raise HTTPException(status_code=403, detail="Verification failed")
 
 
 @app.post("/webhook")
 async def receive_message(request: Request, background_tasks: BackgroundTasks):
-    """Receive inbound WhatsApp messages and process them via the agent."""
     body = await request.json()
     log.info("Inbound payload: %s", body)
 
