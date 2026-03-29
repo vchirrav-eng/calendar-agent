@@ -14,15 +14,17 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="Calendar Agent Webhook")
+# redirect_slashes=False prevents 307 redirects on trailing slash
+app = FastAPI(title="Calendar Agent Webhook", redirect_slashes=False)
 
-# Read at request time, not module load time, to ensure env vars are loaded
 def get_verify_token():
     return os.environ.get("WA_VERIFY_TOKEN", "")
 
-WA_ACCESS_TOKEN = os.getenv("WA_ACCESS_TOKEN", "")
-WA_PHONE_NUMBER_ID = os.getenv("WA_PHONE_NUMBER_ID", "")
-WA_API_URL = f"https://graph.facebook.com/v19.0/{WA_PHONE_NUMBER_ID}/messages"
+def get_access_token():
+    return os.environ.get("WA_ACCESS_TOKEN", "")
+
+def get_phone_number_id():
+    return os.environ.get("WA_PHONE_NUMBER_ID", "")
 
 
 @app.get("/")
@@ -32,23 +34,21 @@ async def health():
 
 @app.get("/debug")
 async def debug():
-    """Temporary debug endpoint — remove after fixing."""
     token = os.environ.get("WA_VERIFY_TOKEN", "NOT_SET")
     return {
         "WA_VERIFY_TOKEN_set": token != "NOT_SET",
         "WA_VERIFY_TOKEN_length": len(token),
-        "WA_VERIFY_TOKEN_value": token,  # remove after debugging
+        "WA_VERIFY_TOKEN_value": token,
         "all_env_keys": [k for k in os.environ.keys() if k.startswith("WA_")]
     }
 
 
-@app.get("/webhook")
-async def verify_webhook(request: Request):
+async def _verify(request: Request):
+    """Shared verification logic for both /webhook and /webhook/"""
     params = request.query_params
     mode = params.get("hub.mode") or params.get("hub_mode")
     challenge = params.get("hub.challenge") or params.get("hub_challenge")
     token = params.get("hub.verify_token") or params.get("hub_verify_token")
-
     verify_token = get_verify_token()
 
     log.info("Webhook verify — mode=%s token=%s challenge=%s", mode, token, challenge)
@@ -62,8 +62,8 @@ async def verify_webhook(request: Request):
     raise HTTPException(status_code=403, detail="Verification failed")
 
 
-@app.post("/webhook")
-async def receive_message(request: Request, background_tasks: BackgroundTasks):
+async def _receive(request: Request, background_tasks: BackgroundTasks):
+    """Shared inbound message handler for both /webhook and /webhook/"""
     body = await request.json()
     log.info("Inbound payload: %s", body)
 
@@ -91,6 +91,19 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     return {"status": "ok"}
 
 
+# Register both with and without trailing slash
+@app.get("/webhook")
+@app.get("/webhook/")
+async def verify_webhook(request: Request):
+    return await _verify(request)
+
+
+@app.post("/webhook")
+@app.post("/webhook/")
+async def receive_message(request: Request, background_tasks: BackgroundTasks):
+    return await _receive(request, background_tasks)
+
+
 async def process_and_reply(sender_id: str, user_text: str):
     from agent.agent import run_agent
     try:
@@ -103,8 +116,10 @@ async def process_and_reply(sender_id: str, user_text: str):
 
 
 async def send_whatsapp_message(to: str, text: str):
+    phone_id = get_phone_number_id()
+    wa_api_url = f"https://graph.facebook.com/v19.0/{phone_id}/messages"
     headers = {
-        "Authorization": f"Bearer {WA_ACCESS_TOKEN}",
+        "Authorization": f"Bearer {get_access_token()}",
         "Content-Type": "application/json",
     }
     payload = {
@@ -114,7 +129,7 @@ async def send_whatsapp_message(to: str, text: str):
         "text": {"body": text},
     }
     async with httpx.AsyncClient() as client:
-        resp = await client.post(WA_API_URL, json=payload, headers=headers)
+        resp = await client.post(wa_api_url, json=payload, headers=headers)
         if resp.status_code != 200:
             log.error("Failed to send WA message: %s %s", resp.status_code, resp.text)
         else:
