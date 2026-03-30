@@ -285,3 +285,29 @@ If you want history to survive redeploys, add a Redis instance to your
 Railway project and replace the in-memory `_history` dict with Redis
 key-value storage. Each sender's message list can be serialized as JSON
 and stored with a TTL of 86400 seconds (24 hours).
+
+---
+
+## Security and Enterprise Readiness
+
+The current security posture is limited mainly to authentication between
+services and the minimum controls provided by the underlying platforms.
+That is acceptable for a personal or prototype deployment, but it is not
+enterprise-ready.
+
+Using Forrester's AEGIS framework as a reference, there is still
+substantial work required to harden this solution for enterprise use.
+The table below summarizes the current implementation and the main gaps.
+
+| AEGIS Domain | Our Implementation | Gap |
+|---|---|---|
+| GRC | None | No audit log, no approval gates, no policy enforcement |
+| IAM | OAuth user token, implicit sender trust | Should use service account, verify sender identity |
+| Data Security | Plaintext secrets in env vars, data sent to OpenAI | Should use vault, private LLM, data minimization |
+| AppSec | No webhook signature check, no prompt injection defense | Twilio signature validation, guardrails needed |
+| Threat Management | Logs only, no alerting | SIEM integration, anomaly detection, circuit breakers |
+| Zero Trust | Implicit trust everywhere | Short-lived tokens, mTLS, network segmentation |
+
+This comparison is intended to show what would need to be added before
+calling the system enterprise-ready under an AEGIS-aligned security
+model.
