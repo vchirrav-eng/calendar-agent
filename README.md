@@ -261,3 +261,54 @@ The Twilio Auth Token never expires. No rotation needed.
 ### Twilio sandbox limitation
 The sandbox requires periodic re-joining and only works for registered test numbers.
 For permanent production use, register a proper WhatsApp Business number in Twilio.
+
+---
+
+## Conversation Memory
+
+The agent maintains per-sender conversation history in memory, enabling
+multi-turn interactions within the same day.
+
+### How it works
+
+- Each WhatsApp number gets its own history bucket
+- The last 20 messages (~10 turns) are passed to the agent on every request
+- At midnight (your `CALENDAR_TIMEZONE`), history is automatically cleared
+- No database needed — runs entirely in Railway's process memory
+
+### What this enables
+
+```
+You: Add a team meeting tomorrow at 2pm
+Agent: Done! Team Meeting added for March 30, 2:00–3:00pm.
+
+You: Make it 90 minutes instead
+Agent: Updated! Team Meeting is now 2:00–3:30pm.
+
+You: Also share it with sarah@company.com
+Agent: Done, Sarah has been shared on that event.
+```
+
+### Memory limits
+
+| Setting | Value |
+|---|---|
+| Max messages per sender | 20 (last 10 turns) |
+| Reset schedule | Midnight in `CALENDAR_TIMEZONE` |
+| Storage | In-process RAM (no database) |
+| Persistence across deploys | ❌ Resets on Railway redeploy |
+
+### Monitoring
+
+Railway logs show memory usage after every message:
+
+```
+INFO: History store: 1 senders, 6 total messages
+```
+
+### Upgrading to persistent memory
+
+If you want history to survive redeploys, add a Redis instance to your
+Railway project and replace the in-memory `_history` dict with Redis
+key-value storage. Each sender's message list can be serialized as JSON
+and stored with a TTL of 86400 seconds (24 hours).
