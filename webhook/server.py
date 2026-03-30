@@ -1,7 +1,7 @@
 """
 webhook/server.py
 FastAPI server using Twilio for WhatsApp messaging.
-Supports both text and audio (voice) messages.
+Supports text and audio (voice) messages.
 Audio is transcribed via OpenAI Whisper before being passed to the agent.
 """
 import os
@@ -41,6 +41,17 @@ async def health():
     return {"status": "ok", "service": "calendar-agent"}
 
 
+@app.get("/debug")
+async def debug():
+    return {
+        "TWILIO_ACCOUNT_SID_set": bool(os.environ.get("TWILIO_ACCOUNT_SID")),
+        "TWILIO_AUTH_TOKEN_set": bool(os.environ.get("TWILIO_AUTH_TOKEN")),
+        "TWILIO_WHATSAPP_NUMBER": os.environ.get("TWILIO_WHATSAPP_NUMBER", "NOT_SET"),
+        "GOOGLE_TOKEN_B64_set": bool(os.environ.get("GOOGLE_TOKEN_B64")),
+        "OPENAI_API_KEY_set": bool(os.environ.get("OPENAI_API_KEY")),
+    }
+
+
 @app.post("/webhook")
 @app.post("/webhook/")
 async def receive_message(request: Request, background_tasks: BackgroundTasks):
@@ -51,10 +62,10 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     """
     form = await request.form()
 
-    sender = form.get("From", "")
-    msg_type = form.get("MediaContentType0", "")
+    sender = form.get("From", "")          # e.g. whatsapp:+917993479200
     body = form.get("Body", "").strip()
     media_url = form.get("MediaUrl0", "")
+    msg_type = form.get("MediaContentType0", "")
 
     log.info("Inbound from %s — type=%s body=%s media=%s",
              sender, msg_type or "text", body[:80] if body else "", bool(media_url))
@@ -62,30 +73,25 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     if not sender:
         return PlainTextResponse(content="", status_code=200)
 
-    # --- Audio message ---
+    # Audio message
     if media_url and msg_type.startswith("audio/"):
         background_tasks.add_task(process_audio_and_reply, sender, media_url)
         return PlainTextResponse(content="", status_code=200)
 
-    # --- Text message ---
+    # Text message
     if body:
         background_tasks.add_task(process_and_reply, sender, body)
         return PlainTextResponse(content="", status_code=200)
 
-    # Ignore everything else (images, stickers, etc.)
     log.info("Ignored non-text/non-audio message from %s", sender)
     return PlainTextResponse(content="", status_code=200)
 
 
 async def transcribe_audio(media_url: str) -> str:
-    """
-    Download audio from Twilio and transcribe via OpenAI Whisper.
-    Twilio requires Basic Auth to download media.
-    """
+    """Download audio from Twilio and transcribe via OpenAI Whisper."""
     account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
     auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
 
-    # Download the audio file from Twilio
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             media_url,
@@ -97,7 +103,6 @@ async def transcribe_audio(media_url: str) -> str:
         audio_bytes = resp.content
         content_type = resp.headers.get("content-type", "audio/ogg")
 
-    # Determine file extension from content type
     ext_map = {
         "audio/ogg": ".ogg",
         "audio/mpeg": ".mp3",
@@ -108,7 +113,6 @@ async def transcribe_audio(media_url: str) -> str:
     }
     ext = ext_map.get(content_type.split(";")[0].strip(), ".ogg")
 
-    # Write to temp file and transcribe
     with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
         tmp.write(audio_bytes)
         tmp_path = tmp.name
@@ -132,25 +136,34 @@ async def process_audio_and_reply(sender: str, media_url: str):
         log.info("Transcribing audio from %s", sender)
         transcript = await transcribe_audio(media_url)
         if not transcript.strip():
-            await send_whatsapp_message(sender, "⚠️ I couldn't understand the audio. Please try again or send a text message.")
+            await send_whatsapp_message(
+                sender,
+                "⚠️ I couldn't understand the audio. Please try again or send a text message."
+            )
             return
-        log.info("Transcript from %s: %s", sender, transcript)
         await process_and_reply(sender, transcript)
     except Exception as e:
         log.error("Audio transcription error: %s", e, exc_info=True)
-        await send_whatsapp_message(sender, "⚠️ Couldn't process the audio message. Please try sending text instead.")
+        await send_whatsapp_message(
+            sender,
+            "⚠️ Couldn't process the audio message. Please try sending text instead."
+        )
 
 
 async def process_and_reply(sender: str, user_text: str):
-    """Run the agent and send the reply."""
+    """Run the agent with conversation history and send the reply."""
     from agent.agent import run_agent
     try:
-        reply = run_agent(user_text)
+        # Pass sender as the history key — history resets automatically at midnight
+        reply = run_agent(user_text, sender_id=sender)
         log.info("Agent reply to %s: %s", sender, reply)
         await send_whatsapp_message(sender, reply)
     except Exception as e:
         log.error("Agent error: %s", e, exc_info=True)
-        await send_whatsapp_message(sender, "⚠️ Sorry, something went wrong. Please try again.")
+        await send_whatsapp_message(
+            sender,
+            "⚠️ Sorry, something went wrong. Please try again."
+        )
 
 
 async def send_whatsapp_message(to: str, text: str):
