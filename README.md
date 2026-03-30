@@ -6,34 +6,7 @@ deletes, and shares events on your behalf — running 24/7 in the cloud.
 
 ## Architecture
 
-```
-Your iPhone (WhatsApp)
-        │
-        ▼
-   Twilio API
-  (WhatsApp channel)
-        │
-        ▼
-  Railway (FastAPI)
-  webhook/server.py
-        │
-   ┌────┴────┐
-   │         │
-Text msg   Voice msg
-   │         │
-   │    OpenAI Whisper
-   │    (transcription)
-   │         │
-   └────┬────┘
-        │
-  LangGraph ReAct Agent
-  (GPT-4o-mini)
-        │
-  Google Calendar API
-  (read/write/share)
-        │
-  Reply back to WhatsApp
-```
+![Architecture Diagram](images/architecture.png)
 
 ## What you can say (text or voice)
 
