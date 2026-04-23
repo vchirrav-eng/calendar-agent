@@ -38,7 +38,7 @@ deletes, and shares events on your behalf — running 24/7 in the cloud.
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/calendar-agent
+git clone https://github.com/vchirrav-eng/calendar-agent
 cd calendar-agent
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
